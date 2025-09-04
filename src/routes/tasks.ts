@@ -1,62 +1,64 @@
-import { Router, Request, Response } from 'express';
-import { TaskService } from '../services/taskService';
-import { SyncService } from '../services/syncService';
-import { Database } from '../db/database';
+
+import { Router, Request, Response } from "express";
+import { TaskService } from "../services/taskService";
+import { Database } from "../db/database";
 
 export function createTaskRouter(db: Database): Router {
   const router = Router();
   const taskService = new TaskService(db);
-  const syncService = new SyncService(db, taskService);
 
-  // Get all tasks
-  router.get('/', async (req: Request, res: Response) => {
+  // GET all tasks
+  router.get("/", async (_req: Request, res: Response) => {
     try {
       const tasks = await taskService.getAllTasks();
       res.json(tasks);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch tasks' });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to fetch tasks", details: err.message });
     }
   });
 
-  // Get single task
-  router.get('/:id', async (req: Request, res: Response) => {
+  // GET single task
+  router.get("/:id", async (req: Request, res: Response) => {
     try {
       const task = await taskService.getTask(req.params.id);
-      if (!task) {
-        return res.status(404).json({ error: 'Task not found' });
-      }
+      if (!task) return res.status(404).json({ error: "Task not found" });
       res.json(task);
-    } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch task' });
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to fetch task", details: err.message });
     }
   });
 
-  // Create task
-  router.post('/', async (req: Request, res: Response) => {
-    // TODO: Implement task creation endpoint
-    // 1. Validate request body
-    // 2. Call taskService.createTask()
-    // 3. Return created task
-    res.status(501).json({ error: 'Not implemented' });
+  // POST create task
+  router.post("/", async (req: Request, res: Response) => {
+    try {
+      if (!req.body.title) return res.status(400).json({ error: "Title is required" });
+      const task = await taskService.createTask(req.body);
+      res.status(201).json(task);
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to create task", details: err.message });
+    }
   });
 
-  // Update task
-  router.put('/:id', async (req: Request, res: Response) => {
-    // TODO: Implement task update endpoint
-    // 1. Validate request body
-    // 2. Call taskService.updateTask()
-    // 3. Handle not found case
-    // 4. Return updated task
-    res.status(501).json({ error: 'Not implemented' });
+  // PUT update task
+  router.put("/:id", async (req: Request, res: Response) => {
+    try {
+      const task = await taskService.updateTask(req.params.id, req.body);
+      if (!task) return res.status(404).json({ error: "Task not found" });
+      res.json(task);
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to update task", details: err.message });
+    }
   });
 
-  // Delete task
-  router.delete('/:id', async (req: Request, res: Response) => {
-    // TODO: Implement task deletion endpoint
-    // 1. Call taskService.deleteTask()
-    // 2. Handle not found case
-    // 3. Return success response
-    res.status(501).json({ error: 'Not implemented' });
+  // DELETE task
+  router.delete("/:id", async (req: Request, res: Response) => {
+    try {
+      const ok = await taskService.deleteTask(req.params.id);
+      if (!ok) return res.status(404).json({ error: "Task not found" });
+      res.status(204).send();
+    } catch (err: any) {
+      res.status(500).json({ error: "Failed to delete task", details: err.message });
+    }
   });
 
   return router;

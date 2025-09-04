@@ -1,76 +1,85 @@
-import axios from 'axios';
-import { Task, SyncQueueItem, SyncResult, BatchSyncRequest, BatchSyncResponse } from '../types';
-import { Database } from '../db/database';
-import { TaskService } from './taskService';
+
+import axios from "axios";
+import { Task, SyncQueueItem, SyncResult, SyncError, BatchSyncRequest, BatchSyncResponse } from "../types";
+import { Database } from "../db/database";
+import { TaskService } from "./taskService";
 
 export class SyncService {
   private apiUrl: string;
-  
-  constructor(
-    private db: Database,
-    private taskService: TaskService,
-    apiUrl: string = process.env.API_BASE_URL || 'http://localhost:3000/api'
-  ) {
-    this.apiUrl = apiUrl;
+
+  constructor(private db: Database, private taskService: TaskService, apiUrl?: string) {
+    this.apiUrl = apiUrl ?? process.env.API_BASE_URL ?? "http://localhost:3000/api";
   }
 
   async sync(): Promise<SyncResult> {
-    // TODO: Main sync orchestration method
-    // 1. Get all items from sync queue
-    // 2. Group items by batch (use SYNC_BATCH_SIZE from env)
-    // 3. Process each batch
-    // 4. Handle success/failure for each item
-    // 5. Update sync status in database
-    // 6. Return sync result summary
-    throw new Error('Not implemented');
-  }
+    const tasks = await this.taskService.getTasksNeedingSync();
+    if (tasks.length === 0) return { success: true, synced_items: 0, failed_items: 0, errors: [] };
 
-  async addToSyncQueue(taskId: string, operation: 'create' | 'update' | 'delete', data: Partial<Task>): Promise<void> {
-    // TODO: Add operation to sync queue
-    // 1. Create sync queue item
-    // 2. Store serialized task data
-    // 3. Insert into sync_queue table
-    throw new Error('Not implemented');
+    const batchSize = parseInt(process.env.SYNC_BATCH_SIZE ?? "10", 10);
+    let synced = 0, failed = 0;
+    const errors: SyncError[] = [];
+
+    for (let i = 0; i < tasks.length; i += batchSize) {
+      const batch = tasks.slice(i, i + batchSize);
+
+      try {
+        const response = await this.processBatch(batch.map(t => ({
+          id: t.id,
+          task_id: t.id,
+          operation: "update",
+          data: t,
+          created_at: new Date(),
+          retry_count: 0,
+        })));
+
+        for (const item of response.processed_items) {
+          if (item.status === "success") {
+            await this.updateSyncStatus(item.client_id, "synced");
+            synced++;
+          } else {
+            await this.updateSyncStatus(item.client_id, "error");
+            failed++;
+            errors.push({
+              task_id: item.client_id,
+              operation: "update",
+              error: item.error ?? "Unknown error",
+              timestamp: new Date(),
+            });
+          }
+        }
+      } catch (err: any) {
+        failed += batch.length;
+        for (const t of batch) {
+          await this.updateSyncStatus(t.id, "error");
+          errors.push({
+            task_id: t.id,
+            operation: "update",
+            error: err.message ?? "Batch sync failed",
+            timestamp: new Date(),
+          });
+        }
+      }
+    }
+
+    return { success: failed === 0, synced_items: synced, failed_items: failed, errors };
   }
 
   private async processBatch(items: SyncQueueItem[]): Promise<BatchSyncResponse> {
-    // TODO: Process a batch of sync items
-    // 1. Prepare batch request
-    // 2. Send to server
-    // 3. Handle response
-    // 4. Apply conflict resolution if needed
-    throw new Error('Not implemented');
+    const payload: BatchSyncRequest = { items, client_timestamp: new Date() };
+    const { data } = await axios.post<BatchSyncResponse>(`${this.apiUrl}/batch`, payload);
+    return data;
   }
 
-  private async resolveConflict(localTask: Task, serverTask: Task): Promise<Task> {
-    // TODO: Implement last-write-wins conflict resolution
-    // 1. Compare updated_at timestamps
-    // 2. Return the more recent version
-    // 3. Log conflict resolution decision
-    throw new Error('Not implemented');
-  }
-
-  private async updateSyncStatus(taskId: string, status: 'synced' | 'error', serverData?: Partial<Task>): Promise<void> {
-    // TODO: Update task sync status
-    // 1. Update sync_status field
-    // 2. Update server_id if provided
-    // 3. Update last_synced_at timestamp
-    // 4. Remove from sync queue if successful
-    throw new Error('Not implemented');
-  }
-
-  private async handleSyncError(item: SyncQueueItem, error: Error): Promise<void> {
-    // TODO: Handle sync errors
-    // 1. Increment retry count
-    // 2. Store error message
-    // 3. If retry count exceeds limit, mark as permanent failure
-    throw new Error('Not implemented');
+  private async updateSyncStatus(taskId: string, status: "synced" | "error", serverData?: Partial<Task>) {
+    await this.db.run(
+      `UPDATE tasks 
+       SET sync_status = ?, last_synced_at = ?, server_id = COALESCE(?, server_id)
+       WHERE id = ?`,
+      [status, new Date().toISOString(), serverData?.server_id ?? null, taskId]
+    );
   }
 
   async checkConnectivity(): Promise<boolean> {
-    // TODO: Check if server is reachable
-    // 1. Make a simple health check request
-    // 2. Return true if successful, false otherwise
     try {
       await axios.get(`${this.apiUrl}/health`, { timeout: 5000 });
       return true;

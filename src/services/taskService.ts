@@ -1,56 +1,119 @@
-import { v4 as uuidv4 } from 'uuid';
-import { Task } from '../types';
-import { Database } from '../db/database';
+
+import { v4 as uuidv4 } from "uuid";
+import { Task } from "../types";
+import { Database } from "../db/database";
 
 export class TaskService {
   constructor(private db: Database) {}
 
   async createTask(taskData: Partial<Task>): Promise<Task> {
-    // TODO: Implement task creation
-    // 1. Generate UUID for the task
-    // 2. Set default values (completed: false, is_deleted: false)
-    // 3. Set sync_status to 'pending'
-    // 4. Insert into database
-    // 5. Add to sync queue
-    throw new Error('Not implemented');
+    const id = uuidv4();
+    const now = new Date(); // Date object
+
+    const task: Task = {
+      id,
+      title: taskData.title ?? "",
+      description: taskData.description ?? "",
+      completed: false,
+      is_deleted: false,
+      updated_at: now,
+      sync_status: "pending",
+    };
+
+    await this.db.run(
+      `INSERT INTO tasks (id, title, description, completed, is_deleted, updated_at, sync_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        task.id,
+        task.title,
+        task.description,
+        task.completed ? 1 : 0,
+        task.is_deleted ? 1 : 0,
+        task.updated_at.toISOString(),
+        task.sync_status,
+      ]
+    );
+
+    await this.db.run(
+      `INSERT INTO sync_queue (task_id, operation, data, retry_count, created_at)
+       VALUES (?, 'create', ?, 0, ?)`,
+      [task.id, JSON.stringify(task), now.toISOString()]
+    );
+
+    return task;
   }
 
   async updateTask(id: string, updates: Partial<Task>): Promise<Task | null> {
-    // TODO: Implement task update
-    // 1. Check if task exists
-    // 2. Update task in database
-    // 3. Update updated_at timestamp
-    // 4. Set sync_status to 'pending'
-    // 5. Add to sync queue
-    throw new Error('Not implemented');
+    const existing = await this.getTask(id);
+    if (!existing) return null;
+
+    const now = new Date();
+    const updated: Task = {
+      ...existing,
+      ...updates,
+      updated_at: now,
+      sync_status: "pending",
+    };
+
+    await this.db.run(
+      `UPDATE tasks
+       SET title = ?, description = ?, completed = ?, is_deleted = ?, updated_at = ?, sync_status = ?
+       WHERE id = ?`,
+      [
+        updated.title,
+        updated.description,
+        updated.completed ? 1 : 0,
+        updated.is_deleted ? 1 : 0,
+        updated.updated_at.toISOString(),
+        updated.sync_status,
+        id,
+      ]
+    );
+
+    await this.db.run(
+      `INSERT INTO sync_queue (task_id, operation, data, retry_count, created_at)
+       VALUES (?, 'update', ?, 0, ?)`,
+      [id, JSON.stringify(updated), now.toISOString()]
+    );
+
+    return updated;
   }
 
   async deleteTask(id: string): Promise<boolean> {
-    // TODO: Implement soft delete
-    // 1. Check if task exists
-    // 2. Set is_deleted to true
-    // 3. Update updated_at timestamp
-    // 4. Set sync_status to 'pending'
-    // 5. Add to sync queue
-    throw new Error('Not implemented');
+    const existing = await this.getTask(id);
+    if (!existing) return false;
+
+    const now = new Date();
+
+    await this.db.run(
+      `UPDATE tasks
+       SET is_deleted = 1, updated_at = ?, sync_status = 'pending'
+       WHERE id = ?`,
+      [now.toISOString(), id]
+    );
+
+    await this.db.run(
+      `INSERT INTO sync_queue (task_id, operation, data, retry_count, created_at)
+       VALUES (?, 'delete', ?, 0, ?)`,
+      [id, JSON.stringify(existing), now.toISOString()]
+    );
+
+    return true;
   }
 
   async getTask(id: string): Promise<Task | null> {
-    // TODO: Implement get single task
-    // 1. Query database for task by id
-    // 2. Return null if not found or is_deleted is true
-    throw new Error('Not implemented');
+    const row = await this.db.get(`SELECT * FROM tasks WHERE id = ?`, [id]);
+    if (!row || row.is_deleted) return null;
+    return { ...row, updated_at: new Date(row.updated_at) } as Task;
   }
 
   async getAllTasks(): Promise<Task[]> {
-    // TODO: Implement get all non-deleted tasks
-    // 1. Query database for all tasks where is_deleted = false
-    // 2. Return array of tasks
-    throw new Error('Not implemented');
+    const rows = await this.db.all(`SELECT * FROM tasks WHERE is_deleted = 0 ORDER BY updated_at DESC`);
+    return rows.map(r => ({ ...r, updated_at: new Date(r.updated_at) })) as Task[];
   }
 
   async getTasksNeedingSync(): Promise<Task[]> {
-    // TODO: Get all tasks with sync_status = 'pending' or 'error'
-    throw new Error('Not implemented');
+    const rows = await this.db.all(`SELECT * FROM tasks WHERE sync_status IN ('pending','error')`);
+    return rows.map(r => ({ ...r, updated_at: new Date(r.updated_at) })) as Task[];
   }
 }
